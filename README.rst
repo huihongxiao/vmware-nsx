@@ -103,10 +103,63 @@ OpenStack Neutron to call the 3rd-party SDN controller and vCenter API.
 Several things need to be considered.
 
 #. The VLAN Tag from vSwitch should be passed to VTEP(or leaf switch), so
-   that the VTEP can build its tranforming table.
-#. Create a Neutron network should both create VDS in VMWare and logical
-   network in 3rd-party SDN.
+   that the VTEP can build its VLAN-VxLAN mapping table.
+#. Creating a Neutron network should both create VDS in VMWare and
+   logical network in 3rd-party SDN.
 #. ML2 port binding should be taken care of, to make the VM created by
    OpenStack have a feasible network in such architecture.
+#. VM migration should be take cared of.
 
-Above are just some initial thoughts. Will come back with more details.
+For now, the vmware-nsx project only provides core plugin for Neutron
+server, while the ML2 plugin became a de-facto way for SDN integrating
+with Neutron server. We can assume 3rd-party SDN already has Neutron ML2
+mechanism driver. The first problem in integration will be how to make
+vmware-nsx core plugin work with 3rd-party SDN's ML2 mech_driver.
+
+There will be 2 solutions:
+#. Change vmware-nsx core plugin to ML2 mech_driver. And do the
+   integration under Neutron ML2 framework.
+#. Add ML2 framework to vmware-nsx core plugin, and add 3rd-party SDN's
+   mech_driver in this framework.
+
+Anyway, the management framework will look like::
+
+    +--------------------------------------+
+    |  OpenStack Neutron Server            |
+    |                                      |
+    |                                      |
+    |  +------------+   +----------------+ |
+    |  | VDS driver |   | 3rd SDN driver | |
+    |  +------------+   +----------------+ |
+    +--------------------------------------+
+
+
+Workflow
+========
+
+Create network
+--------------
+
+#. User triggers creating network
+#. OpenStack Neutron calls 3rd-SDN driver to create logical network in
+   3rd-SDN.
+#. OpenStack Neutron calls VDS driver to create VLAN port group in
+   vCenter.
+#  OpenStack Neutron gets the VLAN id from VMware VDS, and sends the
+   VLAN ID to 3rd-SDN to build the VLAN-VxLAN mapping.
+
+
+Boot VM
+-------
+
+#. User triggers booting VM.
+#. Nova creates VM.
+#. Nova calls Neutron to do port-binding.
+#. Neutron pass the actual host to 3rd-SDN to let it know which leaf
+   switch manages the VM.
+
+
+Migrate VM
+----------
+
+Similar to boot VM, I will come back with more details.
