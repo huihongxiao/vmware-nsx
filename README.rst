@@ -145,7 +145,7 @@ Create network
    3rd-SDN.
 #. OpenStack Neutron calls VDS driver to create VLAN port group in
    vCenter.
-#  OpenStack Neutron gets the VLAN id from VMware VDS, and sends the
+#. OpenStack Neutron gets the VLAN id from VMware VDS, and sends the
    VLAN ID to 3rd-SDN to build the VLAN-VxLAN mapping.
 
 
