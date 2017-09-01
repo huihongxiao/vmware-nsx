@@ -15,7 +15,8 @@ vmware-nsx_ provides plugins to integrate NSX with OpenStack Neutron.
 .. _vmware-nsx: https://github.com/openstack/vmware-nsx
 
 Like most pure sofeware SDN products, NSX can be used in a greenfield
-or a brownfield. The case in greenfield is much easier.
+or a brownfield env. The case in greenfield is much easier and will not
+be considered in this file.
 
 For brownfield, how dose VMware products co-work with existing
 networking facilities? If the existing facilities just provides an IP
@@ -30,9 +31,9 @@ devices. All he/she wants to do, is to just use VMware virtualization
 products. How can VMware products work with 3rd-party SDN solution?
 
 Plus, customer wants to use OpenStack as IaaS platform. VMware has its
-own OpenStack product(VMware Integrated OpenStack), but it is all about
-integrating VMware products into OpenStack. It seems like VIO can't
-solve the issue above.
+own OpenStack producti VIO (VMware Integrated OpenStack), but it is all
+about integrating VMware products into OpenStack. It seems like VIO
+can't solve the issue above.
 
 So, in a nutshell, customer wants to use his/her existing hardware SDN
 solution as well as VMware products. And customer wants to use OpenStack
@@ -47,23 +48,24 @@ Before explain the solution, I would like to go through the so called
 In a pure software SDN solution, things are built in software in
 Operation System, like OpenFlow in OpenvSwitch, iptables and etc. In a
 hardware SDN solution, things are built in networking hardware boxes,
-like leaf switch, spine switch, or some other hardware. Hardware SDN
+like switch, router, firewall or some other hardware. Hardware SDN
 solution usually has good performance verse a pure software solution,
-because of dedicated hardware or usage of ASIC or some other magic
+because of dedicated hardware, usage of ASIC, or some other magic
 things.
 
-Take a spine-leaf network architecture as example, the VTEP(VxLAN
-Tunnel Endpoint) are build at leaf switch. And VTEP usually changes
-VLAN packets to VXLAN packets. So the southbound network of VTEP is
-usually VLAN networks.
-
-VMware provides the ablity to do Virtual Switch VLAN Tagging, VMware
-managed VM can send normal Ethernet frame to Virtual Switch, and
-Virtual Switch can send VLAN Tagged frame to Physical Switch.
+Take a fabric(spine-leaf) network architecture as example, the
+VTEP(VxLAN Tunnel Endpoint) are build at leaf switch. And VTEP usually
+converts VLAN packets to VXLAN packets. So the downlink of VTEP is
+usually VLAN networks, which is also the overlay network.
 
 So, if the VLAN Tagged frame can be sent to leaf switch, which has VTEP
 in it, the frame can be encapsulated to VxLAN packet and sent to
 underlay network for transmission.
+
+On the other side, VMware provides the ablity to do Virtual Switch VLAN
+Tagging, VMware managed VM can send normal Ethernet frame to Virtual
+Switch, and Virtual Switch can then send VLAN Tagged frame to Physical
+Switch.
 
 So, the feasible integration solution might looks like::
 
@@ -99,6 +101,7 @@ Details can be found at reference_.
 
 To accomplish similar things in OpenStack, this repository will use
 OpenStack Neutron to call the 3rd-party SDN controller and vCenter API.
+So that 3rd-party SDN controller can work well with VMware VDS.
 
 Several things need to be considered.
 
@@ -108,10 +111,10 @@ Several things need to be considered.
    logical network in 3rd-party SDN.
 #. ML2 port binding should be taken care of, to make the VM created by
    OpenStack have a feasible network in such architecture.
-#. VM migration should be take cared of.
+#. VM migration should be taken care of.
 
-For now, the vmware-nsx project only provides core plugin for Neutron
-server, while the ML2 plugin became a de-facto way for SDN integrating
+Besides, the vmware-nsx project only provides core plugin for Neutron
+server, while the ML2 plugin becomes a de-facto way for SDN integrating
 with Neutron server. We can assume 3rd-party SDN already has Neutron ML2
 mechanism driver. The first problem in integration will be how to make
 vmware-nsx core plugin work with 3rd-party SDN's ML2 mech_driver.
@@ -133,20 +136,25 @@ Anyway, the management framework will look like::
     |  +------------+   +----------------+ |
     +--------------------------------------+
 
+This repository will take solution 1 at first.
 
-Workflow
-========
+Workflow(static mapping)
+========================
+
+Static mapping means all leaf have the same VLAN/VXLAN mapping. This
+acutally limits the number of tenant networks to 4k, and gives up the
+VXLAN advantage. But it is easier for implementation.
 
 Create network
 --------------
 
-#. User triggers creating network
-#. OpenStack Neutron calls 3rd-SDN driver to create logical network in
-   3rd-SDN.
+#. User triggers creating VxLAN network.
+#. OpenStack Neutron finds it is a VxLAN network, and creates a VLAN
+   dynamic segment.
 #. OpenStack Neutron calls VDS driver to create VLAN port group in
-   vCenter.
-#. OpenStack Neutron gets the VLAN id from VMware VDS, and sends the
-   VLAN ID to 3rd-SDN to build the VLAN-VxLAN mapping.
+   vCenter. The VLAN ID is from the just created VLAN dynamic segment.
+#. OpenStack Neutron calls 3rd-SDN driver to create VxLAN logical
+   network and pass the VLAN-VxLAN relationship to SDN controller.
 
 
 Boot VM
@@ -154,10 +162,10 @@ Boot VM
 
 #. User triggers booting VM.
 #. Nova creates VM.
-#. Nova calls Neutron to do port-binding.
-#. Neutron pass the actual host to 3rd-SDN to let it know which leaf
-   switch manages the VM.
-
+#. Nova calls Neutron to create/update port.
+#. Nova gets the port information from Neutorn and uses to spawn VM.
+   Since VIO don't have l2 agent, the mechanism here is simpler than
+   OpenStack community solution.
 
 Migrate VM
 ----------

@@ -10,19 +10,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from neutron.db import api as db_api
-from neutron.extensions import vlantransparent as vlan_ext
 from neutron_lib.api.definitions import provider_net as pnet
-from neutron_lib.plugins import directory
+from neutron_lib import constants
 from neutron_lib.plugins.ml2 import api
 from oslo_log import log
-from oslo_utils import excutils
 
-from vmware_nsx.common import utils as c_utils
-from vmware_nsx.db import db as nsx_db
 from vmware_nsx.dvs import dvs
 
 LOG = log.getLogger(__name__)
+
+# We assume that all leaf switch are in one physical network, which
+# means they will all share one VLAN ID pool, which also means that
+# tenant network under different leaf switch will have same VLAN ID.
+PHYSICAL_NET = "physical_net"
 
 
 class VDSMechDriver(api.MechanismDriver):
@@ -38,27 +38,29 @@ class VDSMechDriver(api.MechanismDriver):
         # TODO(xiaohhui): Anything we need to subscribe from Neutron server.
         pass
 
-    @property
-    def core_plugin(self):
-        return directory.get_plugin()
-
-    # TODO(xiaohhui): Just add placeholder methods here, will add more details
-    # in following patches.
     def create_network_postcommit(self, context):
         # Get information from NetworkContext.
         plugin_context = context._plugin_context
         network = context.current
-        self._dvs_create_network(plugin_context, network)
+        if network.get(pnet.NETWORK_TYPE) != constants.TYPE_VXLAN:
+            # Only handle vxlan for hierarchical port binding.
+            return
 
-    def update_network_postcommit(self, context):
-        # Do nothing, can be removed.
-        pass
+        # Create dynamic vlan segment.
+        segment = {pnet.NETWORK_TYPE: constants.TYPE_VLAN,
+                   pnet.PHYSICAL_NETWORK: PHYSICAL_NET}
+        vlan_segment = context._plugin.type_manager.allocate_dynamic_segment(
+            plugin_context, network['id'], segment)
+
+        self._dvs_create_network(network, vlan_segment)
 
     def delete_network_postcommit(self, context):
-        plugin_context = context._plugin_context
         network = context.current
-        self._dvs_delete_network(plugin_context, network)
+        # Dynamic segment should be deleted along with network.
+        self._dvs_delete_network(network)
 
+    # TODO(xiaohhui): Just add placeholder methods here, will add more details
+    # in following patches.
     def create_port_postcommit(self, context):
         pass
 
@@ -71,49 +73,10 @@ class VDSMechDriver(api.MechanismDriver):
     def bind_port(self, context):
         pass
 
-    def _dvs_create_network(self, context, network):
-        net_data = network
-
-        if net_data['admin_state_up'] is False:
-            LOG.warning("Network with admin_state_up=False are not yet "
-                        "supported by this driver. Ignoring setting for "
-                        "network %s", net_data.get('id'))
-
-        if net_data.get(pnet.NETWORK_TYPE) == c_utils.NetworkTypes.PORTGROUP:
-            # NOTE(xiaohhui): Don't intend to support this network type. As
-            # it is impossible to have PORTGROUP network type in a integration
-            # env.
-            LOG.warning("Network type PORTGROUP not support!")
-            return
-
-        vlan_tag = 0
-        if net_data.get(pnet.NETWORK_TYPE) == c_utils.NetworkTypes.VLAN:
-            vlan_tag = net_data.get(pnet.SEGMENTATION_ID, 0)
-
-        trunk_mode = False
-        # vlan transparent can be an object if not set.
-        if net_data.get(vlan_ext.VLANTRANSPARENT) is True:
-            trunk_mode = True
-
-        # TODO(xiaohhui): Add port group in VDS, the vlan id will be from
-        # network data. But in hierarchical port binding, this might come
-        # from a dynamic segment. So, this is a todo here.
-        dvs_id = self._dvs_get_id(net_data)
-        self._dvs.add_port_group(dvs_id, vlan_tag, trunk_mode=trunk_mode)
-
-        try:
-            # NOTE(xiaohhui): The Neutron segment binding in vds. Should take
-            # care of in integration.
-            nsx_db.add_network_binding(
-                context.session, net_data['id'],
-                net_data.get(pnet.NETWORK_TYPE),
-                'dvs',
-                vlan_tag)
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                LOG.exception('Failed to create network')
-                self._dvs.delete_port_group(dvs_id)
-
+    def _dvs_create_network(self, network, vlan_segment):
+        vlan_tag = vlan_segment.get(pnet.SEGMENTATION_ID)
+        dvs_id = self._dvs_get_id(network)
+        self._dvs.add_port_group(dvs_id, vlan_tag)
         # TODO(xiaohhui): Neutron will schedule dhcp in dhcp_rpc_agent_api. But
         # vmware-nsx has its own mechanism to schedule dhcp. Suppose neutron
         # can handle dhcp well, and after test, these 2 LOCs can be removed.
@@ -128,14 +91,8 @@ class VDSMechDriver(api.MechanismDriver):
             # maximum prefix for name is 43
             return '%s-%s' % (net_data['name'][:43], net_data['id'])
 
-    def _dvs_delete_network(self, context, network):
-        net_id = network['id']
+    def _dvs_delete_network(self, network):
         dvs_id = self._dvs_get_id(network)
-
-        # TODO(xiaohhui): Try to remove it.
-        with db_api.context_manager.writer.using(context):
-            nsx_db.delete_network_bindings(context.session, net_id)
-
         try:
             self._dvs.delete_port_group(dvs_id)
         except Exception:
