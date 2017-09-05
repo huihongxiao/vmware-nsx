@@ -153,8 +153,6 @@ Create network
    dynamic segment.
 #. OpenStack Neutron calls VDS driver to create VLAN port group in
    vCenter. The VLAN ID is from the just created VLAN dynamic segment.
-#. OpenStack Neutron calls 3rd-SDN driver to create VxLAN logical
-   network and pass the VLAN-VxLAN relationship to SDN controller.
 
 
 Boot VM
@@ -163,11 +161,15 @@ Boot VM
 #. User triggers booting VM.
 #. Nova creates VM.
 #. Nova calls Neutron to create/update port.
-#. Nova gets the port information from Neutorn and uses to spawn VM.
+#. In Neutron side, VDS mech driver will bind port, and TOR mech
+   driver will get dynamic segment and sent the VLAN/VXLAN relationship
+   to SDN controller.
+#. Nova gets the port information from Neutorn and uses it to spawn VM.
    Since VIO don't have l2 agent, the mechanism here is simpler than
    OpenStack community solution.
 
 Migrate VM
 ----------
 
-Similar to boot VM, I will come back with more details.
+Since every leaf switch has same VLAN/VXLAN mapping, and VMware VDS
+can be distributed across hosts. Migration should work out of box.

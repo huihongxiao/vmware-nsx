@@ -10,9 +10,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from neutron.db import segments_db
+from neutron.plugins.common import constants
+from neutron.plugins.ml2 import driver_api as api
 from neutron_lib.api.definitions import provider_net as pnet
-from neutron_lib import constants
-from neutron_lib.plugins.ml2 import api
 from oslo_log import log
 
 from vmware_nsx.dvs import dvs
@@ -31,12 +32,11 @@ class VDSMechDriver(api.MechanismDriver):
 
     def initialize(self):
         LOG.info("Starting VDS mech driver")
-        self.subscribe_registries()
-        self._dvs = dvs.SingleDvsManager()
-
-    def subscribe_registries(self):
-        # TODO(xiaohhui): Anything we need to subscribe from Neutron server.
-        pass
+        try:
+            self._dvs = dvs.SingleDvsManager()
+        except Exception:
+            # backward compatibility
+            self._dvs = dvs.DvsManager()
 
     def create_network_postcommit(self, context):
         # Get information from NetworkContext.
@@ -47,41 +47,42 @@ class VDSMechDriver(api.MechanismDriver):
             return
 
         # Create dynamic vlan segment.
-        segment = {pnet.NETWORK_TYPE: constants.TYPE_VLAN,
-                   pnet.PHYSICAL_NETWORK: PHYSICAL_NET}
+        # NOTE(xiaohhui): set the vlan id the same as vxlan id, so that
+        # dhcp server can work without change. dhcp server will use the
+        # network segmentation id as its vlan tag, and we are vlan underlying
+        # same vlan tag/id can make the underlying network work.
+        segment = {api.NETWORK_TYPE: constants.TYPE_VLAN,
+                   api.PHYSICAL_NETWORK: PHYSICAL_NET,
+                   api.SEGMENTATION_ID: network.get(pnet.SEGMENTATION_ID)}
         vlan_segment = context._plugin.type_manager.allocate_dynamic_segment(
             plugin_context, network['id'], segment)
 
         self._dvs_create_network(network, vlan_segment)
+
+    def delete_network_precommit(self, context):
+        plugin_context = context._plugin_context
+        network = context.current
+        # release dynamic segment id
+        dynamic_segment = segments_db.get_dynamic_segment(
+            plugin_context, network['id'], PHYSICAL_NET)
+        if not dynamic_segment:
+            return
+
+        context._plugin.type_manager.release_dynamic_segment(
+            plugin_context, dynamic_segment['id'])
 
     def delete_network_postcommit(self, context):
         network = context.current
         # Dynamic segment should be deleted along with network.
         self._dvs_delete_network(network)
 
-    # TODO(xiaohhui): Just add placeholder methods here, will add more details
-    # in following patches.
-    def create_port_postcommit(self, context):
-        pass
-
-    def update_port_postcommit(self, context):
-        pass
-
-    def delete_port_postcommit(self, context):
-        pass
-
     def bind_port(self, context):
-        pass
+        context.set_binding(context._segments_to_bind[0][api.ID], "dvs", {})
 
     def _dvs_create_network(self, network, vlan_segment):
-        vlan_tag = vlan_segment.get(pnet.SEGMENTATION_ID)
+        vlan_tag = vlan_segment.get(api.SEGMENTATION_ID)
         dvs_id = self._dvs_get_id(network)
         self._dvs.add_port_group(dvs_id, vlan_tag)
-        # TODO(xiaohhui): Neutron will schedule dhcp in dhcp_rpc_agent_api. But
-        # vmware-nsx has its own mechanism to schedule dhcp. Suppose neutron
-        # can handle dhcp well, and after test, these 2 LOCs can be removed.
-        # self.handle_network_dhcp_access(context, new_net,
-        #                                 action='create_network')
 
     def _dvs_get_id(self, net_data):
         if net_data['name'] == '':
@@ -97,8 +98,3 @@ class VDSMechDriver(api.MechanismDriver):
             self._dvs.delete_port_group(dvs_id)
         except Exception:
             LOG.exception('Unable to delete DVS port group %s', id)
-
-        # TODO(xiaohhui): Neutron will schedule dhcp in dhcp_rpc_agent_api. But
-        # vmware-nsx has its own mechanism to schedule dhcp. Suppose neutron
-        # can handle dhcp well, and after test, these 1 LOC can be removed.
-        # self.handle_network_dhcp_access(context, id, action='delete_network')
