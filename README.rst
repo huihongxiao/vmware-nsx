@@ -120,6 +120,7 @@ mechanism driver. The first problem in integration will be how to make
 vmware-nsx core plugin work with 3rd-party SDN's ML2 mech_driver.
 
 There will be 2 solutions:
+
 #. Change vmware-nsx core plugin to ML2 mech_driver. And do the
    integration under Neutron ML2 framework.
 #. Add ML2 framework to vmware-nsx core plugin, and add 3rd-party SDN's
